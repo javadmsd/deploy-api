@@ -14,6 +14,14 @@ const serverPassword = process.env.SERVER_PASSWORD; // Your server's password (o
 const localPath = process.env.LOCAL_PATH; // Local path to your build files
 const remotePath = process.env.REMOTE_PATH; // Destination directory on the server
 
+const commands = [
+  `cd ${remotePath}`,
+  `yarn`,
+  `node --experimental-modules -r ts-node/register -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:run -f ./ormconfig.json`,
+  `rm -rf ./ormconfig.json ./migrations`,
+  `pm2 restart api_v2 --update-env`,
+];
+
 // Create an SSH client
 const ssh = new Client();
 
@@ -34,41 +42,36 @@ ssh
       function uploadFileOrDirectory(fileIndex) {
         if (fileIndex >= localFiles.length) {
           // All files uploaded, execute the PM2 restart command
-          ssh.exec(
-            `cd ${remotePath} && yarn && node --experimental-modules -r ts-node/register -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:run -f ./ormconfig.json && pm2 restart api_v2 --update-env`,
-            (err, stream) => {
-              if (err) throw err;
+          ssh.exec(commands.join(" && "), (err, stream) => {
+            if (err) throw err;
 
-              stream
-                .on("data", (data) => {
-                  console.log("Command Output:", data.toString());
-                })
-                .on("close", (code, signal) => {
-                  console.log(`Command exited with code ${code}`);
-                  ssh.end();
-                });
-            }
-          );
+            stream
+              .on("data", (data) => {
+                console.log("Command Output:", data.toString());
+              })
+              .on("close", (code, signal) => {
+                console.log(`Command exited with code ${code}`);
+                ssh.end();
+              });
+          });
           return;
         }
 
         const file = localFiles[fileIndex];
-        const localFilePath = path.resolve(
-          __dirname,
-          path.join(localPath, file)
-        );
+        const localFilePath = path.resolve(__dirname, localPath, file);
         const remoteFilePath = path.join(remotePath, file).replace(/\\/g, "/");
+        console.log("remoteFilePath", remoteFilePath);
 
         const isDirectory = fs.statSync(localFilePath).isDirectory();
+        console.log("isDirectory", isDirectory);
 
         if (isDirectory) {
           // If it's a directory, create the remote directory and upload its contents recursively
           sftp.mkdir(remoteFilePath, (err) => {
-            if (err) throw err;
-            const subLocalPath = path.join(localPath, file);
-            const subRemotePath = path.join(remotePath, file);
-            uploadDirectory(subLocalPath, subRemotePath, () => {
-              // Upload the next file or directory
+            const subLocalPath = path.resolve(__dirname, localPath, file);
+            console.log("subLocalPath", subLocalPath);
+
+            uploadDirectory(localFilePath, remoteFilePath, () => {
               uploadFileOrDirectory(fileIndex + 1);
             });
           });
